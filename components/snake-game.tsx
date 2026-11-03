@@ -1,0 +1,352 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Pause, Play, RotateCcw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+
+const GRID = 20
+const CELL = 24
+const SIZE = GRID * CELL
+const BASE_TICK_MS = 140
+const MIN_TICK_MS = 60
+const HIGH_SCORE_KEY = 'snake-high-score'
+
+type Point = { x: number; y: number }
+type Direction = 'up' | 'down' | 'left' | 'right'
+type Status = 'ready' | 'running' | 'paused' | 'over'
+
+const VECTORS: Record<Direction, Point> = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+}
+
+const OPPOSITE: Record<Direction, Direction> = {
+  up: 'down',
+  down: 'up',
+  left: 'right',
+  right: 'left',
+}
+
+const KEY_TO_DIRECTION: Record<string, Direction> = {
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  w: 'up',
+  s: 'down',
+  a: 'left',
+  d: 'right',
+}
+
+function initialSnake(): Point[] {
+  const mid = Math.floor(GRID / 2)
+  return [
+    { x: mid, y: mid },
+    { x: mid - 1, y: mid },
+    { x: mid - 2, y: mid },
+  ]
+}
+
+function randomFood(snake: Point[]): Point {
+  const occupied = new Set(snake.map((p) => `${p.x},${p.y}`))
+  const free: Point[] = []
+  for (let x = 0; x < GRID; x++) {
+    for (let y = 0; y < GRID; y++) {
+      if (!occupied.has(`${x},${y}`)) free.push({ x, y })
+    }
+  }
+  return free[Math.floor(Math.random() * free.length)] ?? { x: 0, y: 0 }
+}
+
+function readCssVar(name: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
+export function SnakeGame() {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const snakeRef = useRef<Point[]>(initialSnake())
+  const foodRef = useRef<Point>(randomFood(snakeRef.current))
+  const directionRef = useRef<Direction>('right')
+  const queueRef = useRef<Direction[]>([])
+  const touchStartRef = useRef<Point | null>(null)
+
+  const [status, setStatus] = useState<Status>('ready')
+  const [score, setScore] = useState(0)
+  const [highScore, setHighScore] = useState(0)
+
+  const tickMs = Math.max(MIN_TICK_MS, BASE_TICK_MS - score * 3)
+
+  useEffect(() => {
+    const stored = Number(window.localStorage.getItem(HIGH_SCORE_KEY))
+    if (Number.isFinite(stored)) setHighScore(stored)
+  }, [])
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+
+    const board = readCssVar('--board')
+    const gridLine = readCssVar('--board-grid')
+    const snakeColor = readCssVar('--snake')
+    const snakeHead = readCssVar('--snake-head')
+    const foodColor = readCssVar('--food')
+
+    ctx.fillStyle = board
+    ctx.fillRect(0, 0, SIZE, SIZE)
+
+    ctx.strokeStyle = gridLine
+    ctx.lineWidth = 1
+    for (let i = 1; i < GRID; i++) {
+      ctx.beginPath()
+      ctx.moveTo(i * CELL + 0.5, 0)
+      ctx.lineTo(i * CELL + 0.5, SIZE)
+      ctx.moveTo(0, i * CELL + 0.5)
+      ctx.lineTo(SIZE, i * CELL + 0.5)
+      ctx.stroke()
+    }
+
+    const food = foodRef.current
+    ctx.fillStyle = foodColor
+    ctx.beginPath()
+    ctx.arc(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL / 2 - 4, 0, Math.PI * 2)
+    ctx.fill()
+
+    snakeRef.current.forEach((segment, index) => {
+      ctx.fillStyle = index === 0 ? snakeHead : snakeColor
+      ctx.beginPath()
+      ctx.roundRect(segment.x * CELL + 2, segment.y * CELL + 2, CELL - 4, CELL - 4, 6)
+      ctx.fill()
+    })
+
+    const head = snakeRef.current[0]
+    const dir = VECTORS[directionRef.current]
+    ctx.fillStyle = board
+    const cx = head.x * CELL + CELL / 2 + dir.x * 4
+    const cy = head.y * CELL + CELL / 2 + dir.y * 4
+    const ox = dir.y * 5
+    const oy = dir.x * 5
+    ctx.beginPath()
+    ctx.arc(cx + ox, cy + oy, 2.5, 0, Math.PI * 2)
+    ctx.arc(cx - ox, cy - oy, 2.5, 0, Math.PI * 2)
+    ctx.fill()
+  }, [])
+
+  const reset = useCallback(() => {
+    snakeRef.current = initialSnake()
+    foodRef.current = randomFood(snakeRef.current)
+    directionRef.current = 'right'
+    queueRef.current = []
+    setScore(0)
+    draw()
+  }, [draw])
+
+  const start = useCallback(() => {
+    if (status === 'over') reset()
+    setStatus('running')
+  }, [status, reset])
+
+  const togglePause = useCallback(() => {
+    setStatus((s) => (s === 'running' ? 'paused' : s === 'paused' ? 'running' : s))
+  }, [])
+
+  const steer = useCallback(
+    (next: Direction) => {
+      if (status === 'ready' || status === 'over') start()
+      if (status === 'paused') return
+      const queue = queueRef.current
+      const last = queue[queue.length - 1] ?? directionRef.current
+      if (next === last || next === OPPOSITE[last] || queue.length >= 3) return
+      queue.push(next)
+    },
+    [status, start],
+  )
+
+  useEffect(() => {
+    draw()
+  }, [draw])
+
+  useEffect(() => {
+    if (status !== 'running') return
+
+    const id = window.setInterval(() => {
+      const nextDir = queueRef.current.shift()
+      if (nextDir) directionRef.current = nextDir
+
+      const snake = snakeRef.current
+      const vec = VECTORS[directionRef.current]
+      const head = { x: snake[0].x + vec.x, y: snake[0].y + vec.y }
+      const ate = head.x === foodRef.current.x && head.y === foodRef.current.y
+      const body = ate ? snake : snake.slice(0, -1)
+
+      const hitWall = head.x < 0 || head.y < 0 || head.x >= GRID || head.y >= GRID
+      const hitSelf = body.some((p) => p.x === head.x && p.y === head.y)
+
+      if (hitWall || hitSelf) {
+        setStatus('over')
+        setScore((s) => {
+          setHighScore((h) => {
+            const best = Math.max(h, s)
+            window.localStorage.setItem(HIGH_SCORE_KEY, String(best))
+            return best
+          })
+          return s
+        })
+        return
+      }
+
+      snakeRef.current = [head, ...body]
+      if (ate) {
+        foodRef.current = randomFood(snakeRef.current)
+        setScore((s) => s + 1)
+      }
+      draw()
+    }, tickMs)
+
+    return () => window.clearInterval(id)
+  }, [status, tickMs, draw])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      const dir = KEY_TO_DIRECTION[key]
+      if (dir) {
+        e.preventDefault()
+        steer(dir)
+        return
+      }
+      if (key === ' ' || key === 'Enter') {
+        e.preventDefault()
+        if (status === 'running' || status === 'paused') togglePause()
+        else start()
+      } else if (key === 'r') {
+        reset()
+        setStatus('ready')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [steer, start, togglePause, reset, status])
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0]
+    touchStartRef.current = { x: t.clientX, y: t.clientY }
+  }
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const origin = touchStartRef.current
+    touchStartRef.current = null
+    if (!origin) return
+    const t = e.changedTouches[0]
+    const dx = t.clientX - origin.x
+    const dy = t.clientY - origin.y
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) {
+      if (status !== 'running') start()
+      return
+    }
+    if (Math.abs(dx) > Math.abs(dy)) steer(dx > 0 ? 'right' : 'left')
+    else steer(dy > 0 ? 'down' : 'up')
+  }
+
+  const overlay =
+    status === 'ready'
+      ? { title: 'Snake', body: 'Press Space or tap to start' }
+      : status === 'paused'
+        ? { title: 'Paused', body: 'Press Space to resume' }
+        : status === 'over'
+          ? { title: 'Game over', body: `You ate ${score} ${score === 1 ? 'apple' : 'apples'}. Press Space to retry.` }
+          : null
+
+  return (
+    <div className="flex w-full max-w-[480px] flex-col gap-4">
+      <header className="flex items-end justify-between font-mono">
+        <div>
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">Score</p>
+          <p className="text-3xl font-semibold tabular-nums text-foreground" aria-live="polite">
+            {score}
+          </p>
+        </div>
+        <h1 className="text-sm font-semibold uppercase tracking-[0.3em] text-primary">Snake</h1>
+        <div className="text-right">
+          <p className="text-xs uppercase tracking-widest text-muted-foreground">Best</p>
+          <p className="text-3xl font-semibold tabular-nums text-foreground">{highScore}</p>
+        </div>
+      </header>
+
+      <div
+        className="relative aspect-square w-full touch-none select-none overflow-hidden rounded-xl border border-border shadow-2xl"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
+        <canvas
+          ref={canvasRef}
+          width={SIZE}
+          height={SIZE}
+          className="block h-full w-full"
+          role="img"
+          aria-label={`Snake game board. Score ${score}.`}
+        />
+        {overlay && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/70 p-6 text-center backdrop-blur-sm">
+            <p className="font-mono text-3xl font-bold uppercase tracking-widest text-primary">{overlay.title}</p>
+            <p className="text-sm text-muted-foreground text-pretty">{overlay.body}</p>
+            <Button onClick={status === 'paused' ? togglePause : start} className="mt-2">
+              {status === 'over' ? <RotateCcw /> : <Play />}
+              {status === 'over' ? 'Play again' : status === 'paused' ? 'Resume' : 'Start'}
+            </Button>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={togglePause}
+            disabled={status === 'ready' || status === 'over'}
+          >
+            {status === 'paused' ? <Play /> : <Pause />}
+            {status === 'paused' ? 'Resume' : 'Pause'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              reset()
+              setStatus('ready')
+            }}
+          >
+            <RotateCcw />
+            Restart
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-1 sm:hidden" aria-label="Direction controls">
+          <span />
+          <Button variant="secondary" size="icon" aria-label="Up" onClick={() => steer('up')}>
+            <ArrowUp />
+          </Button>
+          <span />
+          <Button variant="secondary" size="icon" aria-label="Left" onClick={() => steer('left')}>
+            <ArrowLeft />
+          </Button>
+          <Button variant="secondary" size="icon" aria-label="Down" onClick={() => steer('down')}>
+            <ArrowDown />
+          </Button>
+          <Button variant="secondary" size="icon" aria-label="Right" onClick={() => steer('right')}>
+            <ArrowRight />
+          </Button>
+        </div>
+
+        <p className="hidden text-right font-mono text-xs leading-relaxed text-muted-foreground sm:block">
+          Arrows / WASD to move
+          <br />
+          Space to pause · R to restart
+        </p>
+      </div>
+    </div>
+  )
+}
