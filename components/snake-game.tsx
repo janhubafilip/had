@@ -18,16 +18,8 @@ const HIGH_SCORE_KEY = 'snake-high-score'
 type Point = { x: number; y: number }
 type Direction = 'up' | 'down' | 'left' | 'right'
 type Status = 'ready' | 'running' | 'paused' | 'over'
-type Mode = 'walls' | 'wrap'
 
-const MODE_LABELS: Record<Mode, string> = {
-  walls: 'Walls',
-  wrap: 'Wrap (Nokia 3310)',
-}
-
-function highScoreKey(mode: Mode) {
-  return mode === 'walls' ? HIGH_SCORE_KEY : `${HIGH_SCORE_KEY}-${mode}`
-}
+const LEADERBOARD_MODE = 'walls'
 
 const VECTORS: Record<Direction, Point> = {
   up: { x: 0, y: -1 },
@@ -89,7 +81,6 @@ export function SnakeGame() {
   const [status, setStatus] = useState<Status>('ready')
   const [score, setScore] = useState(0)
   const [highScore, setHighScore] = useState(0)
-  const [mode, setMode] = useState<Mode>('walls')
   const [submittedId, setSubmittedId] = useState<number | null>(null)
 
   const {
@@ -97,7 +88,7 @@ export function SnakeGame() {
     error: leaderboardError,
     isLoading: leaderboardLoading,
     mutate: refreshLeaderboard,
-  } = useSWR(['leaderboard', mode], ([, m]) => getTopScores(m))
+  } = useSWR('leaderboard', () => getTopScores(LEADERBOARD_MODE))
 
   const qualifies =
     status === 'over' &&
@@ -109,9 +100,9 @@ export function SnakeGame() {
   const tickMs = Math.max(MIN_TICK_MS, BASE_TICK_MS - score * 3)
 
   useEffect(() => {
-    const stored = Number(window.localStorage.getItem(highScoreKey(mode)))
+    const stored = Number(window.localStorage.getItem(HIGH_SCORE_KEY))
     setHighScore(Number.isFinite(stored) ? stored : 0)
-  }, [mode])
+  }, [])
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -179,16 +170,6 @@ export function SnakeGame() {
     setStatus('running')
   }, [status, reset])
 
-  const changeMode = useCallback(
-    (next: Mode) => {
-      if (next === mode) return
-      setMode(next)
-      reset()
-      setStatus('ready')
-    },
-    [mode, reset],
-  )
-
   const togglePause = useCallback(() => {
     setStatus((s) => (s === 'running' ? 'paused' : s === 'paused' ? 'running' : s))
   }, [])
@@ -218,10 +199,7 @@ export function SnakeGame() {
 
       const snake = snakeRef.current
       const vec = VECTORS[directionRef.current]
-      let head = { x: snake[0].x + vec.x, y: snake[0].y + vec.y }
-      if (mode === 'wrap') {
-        head = { x: (head.x + GRID) % GRID, y: (head.y + GRID) % GRID }
-      }
+      const head = { x: snake[0].x + vec.x, y: snake[0].y + vec.y }
       const ate = head.x === foodRef.current.x && head.y === foodRef.current.y
       const body = ate ? snake : snake.slice(0, -1)
 
@@ -233,7 +211,7 @@ export function SnakeGame() {
         setScore((s) => {
           setHighScore((h) => {
             const best = Math.max(h, s)
-            window.localStorage.setItem(highScoreKey(mode), String(best))
+            window.localStorage.setItem(HIGH_SCORE_KEY, String(best))
             return best
           })
           return s
@@ -250,7 +228,7 @@ export function SnakeGame() {
     }, tickMs)
 
     return () => window.clearInterval(id)
-  }, [status, tickMs, draw, mode])
+  }, [status, tickMs, draw])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -269,13 +247,11 @@ export function SnakeGame() {
       } else if (key === 'r') {
         reset()
         setStatus('ready')
-      } else if (key === 'm' && status !== 'running') {
-        changeMode(mode === 'walls' ? 'wrap' : 'walls')
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [steer, start, togglePause, reset, status, changeMode, mode])
+  }, [steer, start, togglePause, reset, status])
 
   const onTouchStart = (e: React.TouchEvent) => {
     const t = e.touches[0]
@@ -300,13 +276,7 @@ export function SnakeGame() {
 
   const overlay =
     status === 'ready'
-      ? {
-          title: 'Snake',
-          body:
-            mode === 'wrap'
-              ? 'Wrap mode: pass through walls like on the Nokia 3310. Press Space or tap to start.'
-              : 'Press Space or tap to start',
-        }
+      ? { title: 'Snake', body: 'Press Space or tap to start' }
       : status === 'paused'
         ? { title: 'Paused', body: 'Press Space to resume' }
         : status === 'over'
@@ -330,31 +300,7 @@ export function SnakeGame() {
       </header>
 
       <div
-        role="radiogroup"
-        aria-label="Game mode"
-        className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-card p-1 font-mono text-xs uppercase tracking-widest"
-      >
-        {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="radio"
-            aria-checked={mode === m}
-            disabled={status === 'running'}
-            onClick={() => changeMode(m)}
-            className={`rounded-md px-3 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${
-              mode === m ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {MODE_LABELS[m]}
-          </button>
-        ))}
-      </div>
-
-      <div
-        className={`relative aspect-square w-full touch-none select-none overflow-hidden rounded-xl border shadow-2xl ${
-          mode === 'wrap' ? 'border-dashed border-primary/60' : 'border-border'
-        }`}
+        className="relative aspect-square w-full touch-none select-none overflow-hidden rounded-xl border border-border shadow-2xl"
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
@@ -375,9 +321,9 @@ export function SnakeGame() {
               <p className="text-sm text-muted-foreground text-pretty">{overlay.body}</p>
               {qualifies && (
                 <ScoreSubmitForm
-                  key={`${mode}-${score}`}
+                  key={score}
                   score={score}
-                  mode={mode}
+                  mode={LEADERBOARD_MODE}
                   onSubmitted={(id) => {
                     setSubmittedId(id)
                     refreshLeaderboard()
@@ -386,7 +332,7 @@ export function SnakeGame() {
               )}
               {status !== 'paused' && (
                 <Leaderboard
-                  title={`Top 10 · ${MODE_LABELS[mode]}`}
+                  title="Top 10"
                   entries={topScores}
                   isLoading={leaderboardLoading}
                   error={leaderboardError}
@@ -446,7 +392,7 @@ export function SnakeGame() {
         <p className="hidden text-right font-mono text-xs leading-relaxed text-muted-foreground sm:block">
           Arrows / WASD to move
           <br />
-          Space to pause · R to restart · M to switch mode
+          Space to pause · R to restart
         </p>
       </div>
     </div>

@@ -4,7 +4,7 @@ import { asc, desc, eq } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { scores } from '@/lib/db/schema'
 
-const MODES = ['walls', 'wrap'] as const
+const MODES = ['walls'] as const
 export type LeaderboardMode = (typeof MODES)[number]
 
 export type LeaderboardEntry = {
