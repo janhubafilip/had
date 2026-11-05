@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Pause, Play, RotateCcw } from 'lucide-react'
+import useSWR from 'swr'
 import { Button } from '@/components/ui/button'
+import { getTopScores } from '@/app/actions/leaderboard'
+import { Leaderboard } from '@/components/leaderboard'
+import { ScoreSubmitForm } from '@/components/score-submit-form'
 
 const GRID = 20
 const CELL = 24
@@ -14,6 +18,8 @@ const HIGH_SCORE_KEY = 'snake-high-score'
 type Point = { x: number; y: number }
 type Direction = 'up' | 'down' | 'left' | 'right'
 type Status = 'ready' | 'running' | 'paused' | 'over'
+
+const LEADERBOARD_MODE = 'walls'
 
 const VECTORS: Record<Direction, Point> = {
   up: { x: 0, y: -1 },
@@ -75,12 +81,27 @@ export function SnakeGame() {
   const [status, setStatus] = useState<Status>('ready')
   const [score, setScore] = useState(0)
   const [highScore, setHighScore] = useState(0)
+  const [submittedId, setSubmittedId] = useState<number | null>(null)
+
+  const {
+    data: topScores,
+    error: leaderboardError,
+    isLoading: leaderboardLoading,
+    mutate: refreshLeaderboard,
+  } = useSWR('leaderboard', () => getTopScores(LEADERBOARD_MODE))
+
+  const qualifies =
+    status === 'over' &&
+    submittedId === null &&
+    score > 0 &&
+    topScores !== undefined &&
+    (topScores.length < 10 || score > topScores[topScores.length - 1].score)
 
   const tickMs = Math.max(MIN_TICK_MS, BASE_TICK_MS - score * 3)
 
   useEffect(() => {
     const stored = Number(window.localStorage.getItem(HIGH_SCORE_KEY))
-    if (Number.isFinite(stored)) setHighScore(stored)
+    setHighScore(Number.isFinite(stored) ? stored : 0)
   }, [])
 
   const draw = useCallback(() => {
@@ -140,6 +161,7 @@ export function SnakeGame() {
     directionRef.current = 'right'
     queueRef.current = []
     setScore(0)
+    setSubmittedId(null)
     draw()
   }, [draw])
 
@@ -210,6 +232,7 @@ export function SnakeGame() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
       const dir = KEY_TO_DIRECTION[key]
       if (dir) {
@@ -239,6 +262,7 @@ export function SnakeGame() {
     const origin = touchStartRef.current
     touchStartRef.current = null
     if (!origin) return
+    if ((e.target as HTMLElement).closest('form, button, input')) return
     const t = e.changedTouches[0]
     const dx = t.clientX - origin.x
     const dy = t.clientY - origin.y
@@ -289,13 +313,37 @@ export function SnakeGame() {
           aria-label={`Snake game board. Score ${score}.`}
         />
         {overlay && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/70 p-6 text-center backdrop-blur-sm">
-            <p className="font-mono text-3xl font-bold uppercase tracking-widest text-primary">{overlay.title}</p>
-            <p className="text-sm text-muted-foreground text-pretty">{overlay.body}</p>
-            <Button onClick={status === 'paused' ? togglePause : start} className="mt-2">
-              {status === 'over' ? <RotateCcw /> : <Play />}
-              {status === 'over' ? 'Play again' : status === 'paused' ? 'Resume' : 'Start'}
-            </Button>
+          <div className="absolute inset-0 flex flex-col overflow-y-auto bg-background/80 p-4 text-center backdrop-blur-sm sm:p-6">
+            <div className="my-auto flex flex-col items-center gap-3">
+              <p className="font-mono text-2xl font-bold uppercase tracking-widest text-primary sm:text-3xl">
+                {overlay.title}
+              </p>
+              <p className="text-sm text-muted-foreground text-pretty">{overlay.body}</p>
+              {qualifies && (
+                <ScoreSubmitForm
+                  key={score}
+                  score={score}
+                  mode={LEADERBOARD_MODE}
+                  onSubmitted={(id) => {
+                    setSubmittedId(id)
+                    refreshLeaderboard()
+                  }}
+                />
+              )}
+              {status !== 'paused' && (
+                <Leaderboard
+                  title="Top 10"
+                  entries={topScores}
+                  isLoading={leaderboardLoading}
+                  error={leaderboardError}
+                  highlightId={submittedId}
+                />
+              )}
+              <Button onClick={status === 'paused' ? togglePause : start} className="mt-1">
+                {status === 'over' ? <RotateCcw /> : <Play />}
+                {status === 'over' ? 'Play again' : status === 'paused' ? 'Resume' : 'Start'}
+              </Button>
+            </div>
           </div>
         )}
       </div>
